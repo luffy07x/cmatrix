@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cmatrix</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      font-family: 'Share Tech Mono', monospace;
+      cursor: none;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #hud-wrapper {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      user-select: none;
+      font-family: 'Share Tech Mono', monospace;
+      z-index: 10;
+    }
+
+    #hud {
+      color: #00ff41;
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-shadow: 0 0 8px #00ff41;
+      opacity: 0.55;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      overflow: hidden;
+      max-height: 40px;
+      max-width: 800px;
+      transition: max-height 0.4s ease, opacity 0.4s ease, max-width 0.4s ease;
+    }
+
+    #hud.hidden {
+      max-height: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #hud span {
+      margin: 0 10px;
+      cursor: pointer;
+      transition: text-shadow 0.2s;
+      white-space: nowrap;
+    }
+
+    #hud span:hover {
+      opacity: 1;
+      text-shadow: 0 0 20px #00ff41, 0 0 40px #00ff41;
+    }
+
+    #hud span.active {
+      color: #fff;
+      text-shadow: 0 0 10px #fff, 0 0 20px #00ff41;
+    }
+
+    #toggle-btn {
+      color: #00ff41;
+      font-size: 10px;
+      letter-spacing: 3px;
+      text-shadow: 0 0 6px #00ff41;
+      opacity: 0;
+      cursor: pointer;
+      padding: 3px 10px;
+      border: 1px solid #00ff4144;
+      border-radius: 2px;
+      transition: opacity 0.4s, text-shadow 0.3s, border-color 0.3s;
+      white-space: nowrap;
+    }
+
+    #hud-wrapper:hover #toggle-btn,
+    #hud-wrapper.hud-visible #toggle-btn {
+      opacity: 0.35;
+    }
+
+    #toggle-btn:hover {
+      opacity: 0.9 !important;
+      text-shadow: 0 0 14px #00ff41, 0 0 28px #00ff41;
+      border-color: #00ff4199;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="matrix"></canvas>
+  <div id="hud-wrapper">
+    <div id="hud">
+      <span id="btn-pause" onclick="togglePause()">[ SPACE ] PAUSE</span>
+      <span id="btn-color" onclick="cycleColor()">[ C ] COLOR</span>
+      <span id="btn-speed" onclick="toggleSpeed()">[ S ] SPEED</span>
+      <span id="btn-rain"  onclick="toggleRain()">[ R ] RAIN</span>
+    </div>
+    <div id="toggle-btn" onclick="toggleHud()" title="H">[ H ] TOGGLE HUD</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('matrix');
+    const ctx = canvas.getContext('2d');
+
+    const CHAR_SIZE = 16;
+    let paused = false;
+    let rainMode = false; // dense rain
+    let speedMult = 1;
+    let colorIndex = 0;
+
+    const COLORS = [
+      { lead: '#ffffff', bright: '#aaffaa', mid: '#00ff41', dim: '#008f22', shadow: '#003b00' },
+      { lead: '#ffffff', bright: '#aaddff', mid: '#00aaff', dim: '#005588', shadow: '#001a33' },
+      { lead: '#ffffff', bright: '#ffccaa', mid: '#ff6600', dim: '#882200', shadow: '#2a0800' },
+      { lead: '#ffffff', bright: '#ffaaff', mid: '#cc00ff', dim: '#660099', shadow: '#1a0033' },
+      { lead: '#ffffff', bright: '#ffffaa', mid: '#ffdd00', dim: '#886600', shadow: '#2a1e00' },
+    ];
+
+    let cols, drops, speeds, glowHeads;
+
+    // Katakana + latin + digits + symbols
+    const charSets = [
+      'ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ',
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*<>?|',
+      '01',
+      '∑∫∂∆∏∞≈≠≤≥±×÷√∛∜αβγδεζηθλμπρσφψω',
+    ];
+    let charSet = charSets[0];
+
+    function randomChar() {
+      return charSet[Math.floor(Math.random() * charSet.length)];
+    }
+
+    function init() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+
+      cols = Math.floor(canvas.width / CHAR_SIZE);
+      drops = new Array(cols).fill(0).map(() => Math.random() * -100);
+      speeds = new Array(cols).fill(0).map(() => 0.3 + Math.random() * 0.7);
+      glowHeads = new Array(cols).fill(true);
+    }
+
+    function getColor() {
+      return COLORS[colorIndex % COLORS.length];
+    }
+
+    let frameCount = 0;
+    let lastTime = 0;
+
+    function draw(ts) {
+      if (!paused) {
+        const delta = ts - lastTime;
+        const interval = rainMode ? 30 : 50;
+
+        if (delta > interval / speedMult) {
+          lastTime = ts;
+          frameCount++;
+
+          const c = getColor();
+
+          // Semi-transparent black overlay creates trail fade
+          ctx.fillStyle = rainMode ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.05)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          ctx.font = `${CHAR_SIZE}px 'Share Tech Mono', monospace`;
+
+          for (let i = 0; i < cols; i++) {
+            const y = Math.floor(drops[i]) * CHAR_SIZE;
+            const x = i * CHAR_SIZE;
+
+            // Leading character - bright white glow
+            if (glowHeads[i]) {
+              ctx.shadowColor = c.lead;
+              ctx.shadowBlur = 20;
+              ctx.fillStyle = c.lead;
+              ctx.fillText(randomChar(), x, y);
+
+              // Second char - bright green
+              ctx.shadowColor = c.bright;
+              ctx.shadowBlur = 12;
+              ctx.fillStyle = c.bright;
+              ctx.fillText(randomChar(), x, y - CHAR_SIZE);
+            }
+
+            // Mid-trail chars - randomly mutate some
+            const trailLen = rainMode ? 30 : 20;
+            for (let t = 2; t < trailLen; t++) {
+              const ty = y - t * CHAR_SIZE;
+              if (ty < 0) continue;
+              const fade = 1 - t / trailLen;
+
+              if (t < 4) {
+                ctx.shadowColor = c.mid;
+                ctx.shadowBlur = 6;
+                ctx.fillStyle = c.mid;
+              } else if (t < 10) {
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = c.dim;
+              } else {
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = c.shadow;
+              }
+
+              // Randomly mutate characters in trail
+              if (Math.random() < 0.02) {
+                ctx.fillText(randomChar(), x, ty);
+              }
+            }
+
+            // Advance drop
+            drops[i] += speeds[i] * speedMult;
+
+            // Reset when off screen
+            if (drops[i] * CHAR_SIZE > canvas.height + CHAR_SIZE * 30) {
+              if (Math.random() > (rainMode ? 0.1 : 0.3)) {
+                drops[i] = Math.random() * -50;
+                speeds[i] = 0.3 + Math.random() * 0.7;
+                glowHeads[i] = Math.random() > 0.1;
+              }
+            }
+          }
+
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+
+    let hudVisible = true;
+    const hudWrapper = document.getElementById('hud-wrapper');
+    hudWrapper.classList.add('hud-visible');
+
+    function toggleHud() {
+      hudVisible = !hudVisible;
+      document.getElementById('hud').classList.toggle('hidden', !hudVisible);
+      hudWrapper.classList.toggle('hud-visible', hudVisible);
+      document.getElementById('toggle-btn').textContent = hudVisible ? '[ H ] TOGGLE HUD' : '[ H ] SHOW HUD';
+    }
+
+    function updateHudStates() {
+      document.getElementById('btn-pause').classList.toggle('active', paused);
+      document.getElementById('btn-rain').classList.toggle('active', rainMode);
+      const speedLabels = ['[ S ] SPEED', '[ S ] SPEED ×2', '[ S ] SPEED ×0.4'];
+      const si = speedMult === 1 ? 0 : speedMult === 2 ? 1 : 2;
+      document.getElementById('btn-speed').textContent = speedLabels[si];
+      document.getElementById('btn-speed').classList.toggle('active', speedMult !== 1);
+    }
+
+    function togglePause() {
+      paused = !paused;
+      updateHudStates();
+    }
+
+    function cycleColor() {
+      colorIndex = (colorIndex + 1) % COLORS.length;
+    }
+
+    function toggleSpeed() {
+      speedMult = speedMult === 1 ? 2 : speedMult === 2 ? 0.4 : 1;
+      updateHudStates();
+    }
+
+    function toggleRain() {
+      rainMode = !rainMode;
+      updateHudStates();
+    }
+
+    document.addEventListener('keydown', (e) => {
+      switch (e.key.toLowerCase()) {
+        case ' ': e.preventDefault(); togglePause(); break;
+        case 'c': cycleColor(); break;
+        case 's': toggleSpeed(); break;
+        case 'r': toggleRain(); break;
+        case 'h': toggleHud(); break;
+        case '2': charSet = charSets[1]; break;
+        case '3': charSet = charSets[2]; break;
+        case '4': charSet = charSets[3]; break;
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      init();
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    });
+
+    init();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>
